@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Relatório — Test Smells</title>
+<style>
+  @page { size: A4; margin: 14mm 16mm 13mm; }
+  * { box-sizing: border-box; }
+  body { font: 9.8pt/1.38 "Segoe UI", Arial, sans-serif; color: #1a1a1a; margin: 0; }
+  h1 { font-size: 15pt; margin: 0 0 6pt; }
+  h2 { font-size: 12pt; margin: 10pt 0 4pt; border-bottom: 1px solid #ccc; padding-bottom: 2pt; }
+  h3 { font-size: 11pt; margin: 9pt 0 3pt; }
+  p { margin: 0 0 6pt; text-align: justify; }
+  ul { margin: 0 0 6pt; padding-left: 16pt; }
+  li { margin-bottom: 2pt; }
+  code { font: 9pt Consolas, monospace; background: #f1f1f1; padding: 0 2pt; border-radius: 2px; }
+  pre { font: 7.8pt/1.3 Consolas, monospace; background: #f6f6f6; border: 1px solid #ddd; border-radius: 3px; padding: 6pt 8pt; margin: 0; white-space: pre; overflow: hidden; }
+  .cover { height: 265mm; display: flex; flex-direction: column; justify-content: space-between; text-align: center; page-break-after: always; }
+  .cover .top { font-size: 12pt; line-height: 1.6; margin-top: 10mm; }
+  .cover .mid h1 { font-size: 22pt; margin-bottom: 8pt; }
+  .cover .mid p { text-align: center; font-size: 12pt; color: #444; }
+  .cover .bot { font-size: 12pt; line-height: 1.7; margin-bottom: 10mm; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; }
+  .label { font-weight: 600; font-size: 9pt; margin-bottom: 2pt; color: #555; }
+  table { border-collapse: collapse; width: 100%; font-size: 9.5pt; margin: 4pt 0 8pt; }
+  th, td { border: 1px solid #ccc; padding: 3pt 5pt; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  img { width: 88%; display: block; margin: 0 auto; border: 1px solid #999; border-radius: 3px; }
+  .avoid { page-break-inside: avoid; }
+  .tbd { background: #fff3a0; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="top">
+    Pontifícia Universidade Católica<br>
+    <span class="tbd">[NOME DA DISCIPLINA]</span>
+  </div>
+  <div class="mid">
+    <h1>Refatoração de Testes e Detecção de Test Smells</h1>
+    <p>Análise estática com ESLint + eslint-plugin-jest e refatoração da suíte de testes do <code>UserService</code></p>
+  </div>
+  <div class="bot">
+    Pedro Henrique Barbosa Montandon de Araújo<br>
+    Matrícula: <span class="tbd">[MATRÍCULA]</span><br>
+    Repositório: github.com/pedroMontandon/test-smelly<br>
+    Outubro de 2026
+  </div>
+</section>
+
+<h2>1. Análise de Smells</h2>
+<p>A suíte original (<code>test/userService.smelly.test.js</code>) passa integralmente (4 testes aprovados, 1 ignorado), mas a leitura manual revelou diversos maus cheiros. Os três mais graves são descritos abaixo.</p>
+
+<h3>1.1 Lógica Condicional no Teste (Conditional Test Logic)</h3>
+<p><b>Onde:</b> teste <i>"deve desativar usuários se eles não forem administradores"</i>, que percorre um array com <code>for</code> e decide, via <code>if (!user.isAdmin)</code>, quais <code>expect</code> executar.</p>
+<p><b>Por que é mau cheiro:</b> um teste deve ter um único caminho de execução determinístico. Com laços e desvios, o leitor precisa “executar o teste de cabeça” para saber o que está sendo verificado, e cada asserção só roda em parte das iterações.</p>
+<p><b>Risco:</b> se o array mudar (ou ficar vazio), asserções deixam de ser executadas e o teste continua verde. Além disso, uma falha não indica qual cenário (comum ou admin) quebrou — o teste mistura duas regras de negócio distintas.</p>
+
+<h3>1.2 Asserção em <code>try/catch</code> (Silent Exception / Conditional Expect)</h3>
+<p><b>Onde:</b> teste <i>"deve falhar ao criar usuário menor de idade"</i>, cujo único <code>expect</code> está dentro do <code>catch</code>.</p>
+<p><b>Por que é mau cheiro:</b> o teste depende do fluxo de exceção para verificar algo; se a exceção não for lançada, nenhuma asserção roda e o Jest considera o teste aprovado.</p>
+<p><b>Risco:</b> é um falso positivo. Comprovei isso com um “mutante” manual: ao trocar <code>if (idade &lt; 18)</code> por <code>if (false)</code> em <code>src/userService.js</code>, a suíte <i>smelly</i> continuou <b>100% verde</b>, enquanto a suíte limpa falhou imediatamente. É exatamente o tipo de mutante sobrevivente observado no trabalho anterior de Teste de Mutação.</p>
+
+<h3>1.3 Teste Ansioso (Eager Test)</h3>
+<p><b>Onde:</b> teste <i>"deve criar e buscar um usuário corretamente"</i>, que contém dois <i>Acts</i> (<code>createUser</code> e <code>getUserById</code>) intercalados com asserções.</p>
+<p><b>Por que é mau cheiro:</b> verifica vários comportamentos de métodos diferentes num só teste, violando o padrão AAA (Arrange, Act, Assert) e o princípio de uma razão para falhar.</p>
+<p><b>Risco:</b> quando falha, não fica claro se o problema está na criação ou na busca; a primeira asserção que falha também esconde as seguintes, reduzindo o diagnóstico.</p>
+
+<h3>1.4 Outros smells observados</h3>
+<ul>
+  <li><b>Teste Frágil (Fragile Test):</b> o teste de relatório compara a linha exata <code>`ID: ${id}, Nome: Alice, Status: ativo\n`</code>; qualquer mudança cosmética no formato quebra o teste sem haver bug.</li>
+  <li><b>Teste Desabilitado/Vazio:</b> <code>test.skip(...)</code> com apenas um <code>TODO</code>, gerando falsa sensação de cobertura do cenário “sem usuários”.</li>
+  <li><b>Convidado Misterioso leve:</b> dados em <code>dadosUsuarioPadrao</code>, declarados fora do teste, obrigam o leitor a procurar a origem dos valores.</li>
+</ul>
+
+<h2>2. Processo de Refatoração</h2>
+<p>O teste escolhido foi o de desativação, que reúne lógica condicional, duas regras de negócio e asserções escondidas.</p>
+
+<div class="avoid">
+<div class="label">ANTES — userService.smelly.test.js</div>
+<pre>test('deve desativar usuários se eles não forem administradores', () =&gt; {
+  const usuarioComum = userService.createUser('Comum', 'comum@teste.com', 30);
+  const usuarioAdmin = userService.createUser('Admin', 'admin@teste.com', 40, true);
+  const todosOsUsuarios = [usuarioComum, usuarioAdmin];
+
+  for (const user of todosOsUsuarios) {
+    const resultado = userService.deactivateUser(user.id);
+    if (!user.isAdmin) {
+      expect(resultado).toBe(true);
+      const usuarioAtualizado = userService.getUserById(user.id);
+      expect(usuarioAtualizado.status).toBe('inativo');
+    } else {
+      expect(resultado).toBe(false);
+    }
+  }
+});</pre>
+</div>
+
+<div class="avoid" style="margin-top:8pt">
+<div class="label">DEPOIS — userService.clean.test.js (trecho de <code>describe('deactivateUser')</code>)</div>
+<pre>test('retorna true ao desativar um usuário comum', () =&gt; {
+  // Arrange
+  const usuarioComum = userService.createUser('Comum', 'comum@teste.com', 30);
+  // Act
+  const resultado = userService.deactivateUser(usuarioComum.id);
+  // Assert
+  expect(resultado).toBe(true);
+});
+
+test('altera o status de um usuário comum para "inativo"', () =&gt; {
+  // Arrange
+  const usuarioComum = userService.createUser('Comum', 'comum@teste.com', 30);
+  // Act
+  userService.deactivateUser(usuarioComum.id);
+  // Assert
+  expect(userService.getUserById(usuarioComum.id).status).toBe('inativo');
+});
+
+test('retorna false ao tentar desativar um administrador', () =&gt; { /* ... */ });
+test('mantém o administrador com status "ativo" após tentativa de desativação', () =&gt; { /* ... */ });
+test('retorna false quando o usuário não existe', () =&gt; { /* ... */ });</pre>
+</div>
+
+<h3>Decisões tomadas</h3>
+<ul>
+  <li><b>Remoção do <code>for</code>/<code>if</code>:</b> cada cenário virou um teste próprio, com caminho único. Todo <code>expect</code> sempre executa — elimina os erros <code>jest/no-conditional-expect</code>.</li>
+  <li><b>AAA explícito:</b> cada teste tem um único <i>Act</i>, precedido do <i>Arrange</i> e seguido do <i>Assert</i>, marcados com comentários.</li>
+  <li><b>Um comportamento por teste:</b> retorno do método e efeito colateral (status) foram separados; assim uma falha aponta diretamente a regra violada.</li>
+  <li><b>Cenários faltantes:</b> o admin agora também tem o status verificado (antes só o retorno) e foi incluído o caso de id inexistente.</li>
+  <li><b>Nomes descritivos:</b> os títulos descrevem o comportamento esperado, servindo de documentação executável.</li>
+</ul>
+<p>As demais refatorações seguiram o mesmo raciocínio:</p>
+<table>
+  <tr><th>Smell original</th><th>Correção na suíte limpa</th></tr>
+  <tr><td><code>try/catch</code> com <code>expect</code> no <code>catch</code></td><td><code>expect(() =&gt; createUser(..., 17)).toThrow('O usuário deve ser maior de idade.')</code> — falha se a exceção não ocorrer.</td></tr>
+  <tr><td>Eager Test (criar + buscar)</td><td>Dividido em <code>describe('createUser')</code> (dados, id, isAdmin padrão, erros) e <code>describe('getUserById')</code> (encontrado / null).</td></tr>
+  <tr><td>Relatório com string exata</td><td>Verifica comportamento: o relatório contém nome e status de cada usuário (<code>toContain</code>), não a formatação exata.</td></tr>
+  <tr><td><code>test.skip</code> vazio</td><td>Implementado: “informa que não há usuários quando o cadastro está vazio”.</td></tr>
+  <tr><td>Dados globais (<code>dadosUsuarioPadrao</code>)</td><td>Dados declarados no <i>Arrange</i> de cada teste.</td></tr>
+</table>
+<p>Resultado: 5 testes frágeis viraram <b>15 testes pequenos e focados</b>. <code>npm test</code> executa ambas as suítes com sucesso (19 aprovados, 1 ignorado — o <code>skip</code> do arquivo original, que não foi modificado).</p>
+
+<h2>3. Relatório da Ferramenta</h2>
+<p>Configurei <code>eslint@8.57</code> + <code>eslint-plugin-jest@28</code> com o <code>.eslintrc.json</code> do enunciado (versão 8 porque a 9 não lê mais esse formato de configuração por padrão). Primeira execução de <code>npx eslint .</code>:</p>
+<div class="avoid"><img src="eslint-antes.png" alt="Saída do ESLint na primeira execução"></div>
+<p style="margin-top:6pt">A ferramenta detectou automaticamente, com linha e coluna exatas:</p>
+<ul>
+  <li><b>4 erros <code>jest/no-conditional-expect</code></b> — três no laço/<code>if</code> do teste de desativação (linhas 44, 46, 49) e um no <code>catch</code> do teste de menor de idade (linha 73). Confirma os smells 1.1 e 1.2.</li>
+  <li><b>2 avisos na linha 77</b> — <code>jest/no-disabled-tests</code> (teste pulado) e <code>jest/expect-expect</code> (teste sem asserções).</li>
+</ul>
+<p>Comparando com a análise manual, o linter encontrou em segundos os problemas estruturais (lógica condicional, testes desabilitados ou sem asserção), mas <b>não</b> detectou o Eager Test, o Teste Frágil nem o Convidado Misterioso, que dependem de semântica e intenção. A ferramenta, portanto, complementa — e não substitui — a revisão humana.</p>
+<p>Após a refatoração, <code>npx eslint test/userService.clean.test.js</code> retorna <b>0 erros e 0 avisos</b>. Como verificação extra, o arquivo limpo também passa sem problemas em regras mais rígidas não exigidas pelo enunciado (<code>jest/no-conditional-in-test</code>, <code>jest/require-to-throw-message</code>, <code>jest/no-standalone-expect</code>, <code>jest/max-expects</code> com máximo 2).</p>
+
+<h2>4. Conclusão</h2>
+<p>O trabalho mostrou que uma suíte verde não garante proteção: os testes originais passavam mesmo com a validação de idade removida, um bug real que chegaria à produção. Testes limpos — um comportamento por teste, AAA, sem lógica condicional e com asserções sobre comportamento observável — falham pelo motivo certo, indicam diretamente a regra quebrada e resistem a mudanças cosméticas, o que reduz o custo de manutenção.</p>
+<p>A análise estática torna esse cuidado sustentável: integrada ao fluxo (script <code>npm run lint</code>, CI ou <i>pre-commit</i>), impede que smells conhecidos voltem ao código sem depender da atenção do revisor. Aliada ao teste de mutação e à revisão humana, que capturam o que o linter não vê, ela forma uma estratégia de qualidade em camadas para o código de teste, que é tão parte do produto quanto o código de produção.</p>
+
+</body>
+</html>
